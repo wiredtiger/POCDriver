@@ -43,22 +43,28 @@ public class POCTestOptions {
 	int arraytop = 0;
 	int arraynext = 0;
 	int numcollections = 1;
+	int coll_key_range = 1;
 
 	//Zipfian stuff
 	boolean zipfian = false;
 	int zipfsize = 0;
 
-    String username = null;
-    char[] password = null;
-    String authDatabase = null;
-    int blobSize = 0;
+	String username = null;
+	char[] password = null;
+	String authDatabase = null;
+	int blobSize = 0;
 
 	boolean findandmodify=false;
 	int workingset = 100;
 	boolean helpOnly = false;
 	String connectionDetails = "mongodb://localhost:27017";
 	int multistage =0;
-    boolean fulltext;
+	boolean fulltext;
+
+	// David Hows stuff
+	int incrementRate = 1;
+	int incrementIntvl = 0;
+	int incrementPeriod = 0;
 	
 	public POCTestOptions(String[] args) throws ParseException
 	{
@@ -95,6 +101,9 @@ public class POCTestOptions {
 		cliopt.addOption(null,"threadIdStart",true,"Start 'workerId' for each thread. 'w' value in _id. (default 0)");
 		cliopt.addOption(null,"fulltext",false,"Create fulltext index (default false)");
 		cliopt.addOption(null,"binary",true,"add a binary blob of size KB");
+		cliopt.addOption(null,"incrementPeriod",true,"time perdiod in seconds to spend ramping to max collections (default 0)");
+		cliopt.addOption(null,"incrementIntvl",true,"time perdiod in seconds to spend between increases to number of collections (default 0)");
+		cliopt.addOption(null,"collectionKeyMax",true,"Maximum number of keys per collection (default 0)");
 		
 		CommandLine cmd = parser.parse(cliopt, args);
 		
@@ -117,7 +126,7 @@ public class POCTestOptions {
 		if(cmd.hasOption("v"))
 		{
 			workflow = cmd.getOptionValue("v");
-		}	
+		}
 		
 		if(cmd.hasOption("n"))
 		{
@@ -194,6 +203,7 @@ public class POCTestOptions {
 		if(cmd.hasOption("y"))
 		{
 			numcollections = Integer.parseInt(cmd.getOptionValue("y"));
+			incrementRate = numcollections;
 			singleserver=true;
 		}
 		if(cmd.hasOption("z"))
@@ -261,14 +271,25 @@ public class POCTestOptions {
 			numThreads = Integer.parseInt(cmd.getOptionValue("t"));
 		}
 		if(cmd.hasOption("fulltext"))
-        {
-            fulltext = true;
-        }
+		{
+			fulltext = true;
+        	}
 		
 		if(cmd.hasOption("threadIdStart"))
 		{
 			threadIdStart = Integer.parseInt(cmd.getOptionValue("threadIdStart"));
 		}
-		
+		if(cmd.hasOption("incrementPeriod") && cmd.hasOption("incrementIntvl"))
+		{
+			incrementPeriod = Integer.parseInt(cmd.getOptionValue("incrementPeriod"));
+			incrementIntvl = Integer.parseInt(cmd.getOptionValue("incrementIntvl"));
+			float floatRate = numcollections / incrementPeriod * incrementIntvl;
+			incrementRate = Math.round(floatRate); 
+			System.out.println(String.format("Trying to ramp to %d collections over %d seconds, adding %d collections every %d seconds", numcollections, incrementPeriod, incrementRate, incrementIntvl));
+		}
+		if(cmd.hasOption("collectionKeyMax"))
+		{
+			coll_key_range = Integer.parseInt(cmd.getOptionValue("collectionKeyMax"));
+		}
 	}
 }

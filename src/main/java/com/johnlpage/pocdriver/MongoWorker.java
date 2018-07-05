@@ -37,14 +37,22 @@ public class MongoWorker implements Runnable {
 	int numShards = 0;
 	Random rng;
 	ZipfDistribution zipf;
+	ZipfDistribution collectionzipf;
 	boolean workflowed = false;
 	boolean zipfian = false;
 	String workflow;
 	int workflowStep = 0;
 	ArrayList<Document> keyStack;
-	int lastCollection;
+	int nextCollection;
+	int currCollection;
 	int maxCollections;
+	int curCollections;
 	String baseCollectionName;
+	int incrementRate = 0;
+	int incrementIntvl = 0;
+	Date lastIncTime = new Date();
+	int collectionKeyRange = 0;
+	ArrayList<Integer> collectionHash;
 
 	public void ReviewShards() {
 		//System.out.println("Reviewing chunk distribution");
@@ -140,10 +148,18 @@ public class MongoWorker implements Runnable {
 		workerID = id;
 		db = mongoClient.getDatabase(testOpts.databaseName);
 		maxCollections = testOpts.numcollections;
+		curCollections = t.incrementRate;
+		testResults.SetCollectionsNum(curCollections);
 		baseCollectionName = testOpts.collectionName;
+		incrementRate = t.incrementRate;
+		incrementIntvl = t.incrementIntvl;
+		collectionKeyRange = t.coll_key_range;
+		rng = new Random();
+
 		if (maxCollections > 1) {
 			colls = new ArrayList<MongoCollection<Document>>();
-			lastCollection = 0;
+			nextCollection = 0;;
+			currCollection = 0;
 			for (int i = 0; i < maxCollections; i++) {
 				StringBuilder str = new StringBuilder(0);
 				str.append(baseCollectionName);
@@ -158,7 +174,6 @@ public class MongoWorker implements Runnable {
 		sequence = getHighestID();
 
 		ReviewShards();
-		rng = new Random();
 		if (testOpts.zipfian) {
 			zipfian = true;
 			zipf = new ZipfDistribution(testOpts.zipfsize, 0.99);
@@ -170,7 +185,19 @@ public class MongoWorker implements Runnable {
 			keyStack = new ArrayList<Document>();
 		}
 
+		if (collectionKeyRange > 0) {
+			collectionHash = new ArrayList<Integer>();
+			for(int i = 0; i < maxCollections; i++) {
+				collectionHash.add(0);
+			}
+		}
+
 	}
+	private int getNextSequenceNum(int mult) {
+		int rval = 0;
+                rval = (int) Math.abs(Math.floor(rng.nextDouble() * mult));
+                return rval;
+        }
 
 	private int getNextVal(int mult) {
 		int rval = 0;
@@ -302,6 +329,7 @@ public class MongoWorker implements Runnable {
 			testResults.RecordSlowOp("updates", ucount);
 		}
 		testResults.RecordOpsDone("inserts", icount);
+		testResults.RecordLatency("inserts", taken);
 		return true;
 		
 	}
@@ -317,8 +345,14 @@ public class MongoWorker implements Runnable {
 
 		int recordno = rest + getNextVal(range);
 
-		query.append("_id",
+		if (collectionKeyRange > 0) {
+                        int val = collectionHash.get(currCollection);
+                        query.append("_id", val);
+                        collectionHash.set(currCollection, ++val);
+		} else {
+			query.append("_id",
 				new Document("w", workerID).append("i", recordno));
+		}
 		Date starttime = new Date();
 		Document myDoc = (Document) coll.find(query).first();
 		if (myDoc != null) {
@@ -328,6 +362,7 @@ public class MongoWorker implements Runnable {
 			if (taken > testOpts.slowThreshold) {
 				testResults.RecordSlowOp("keyqueries", 1);
 			}
+			testResults.RecordLatency("keyqueries", taken);
 			testResults.RecordOpsDone("keyqueries", 1);
 		}
 		return (Document) myDoc;
@@ -355,14 +390,30 @@ public class MongoWorker implements Runnable {
 		if (taken > testOpts.slowThreshold) {
 			testResults.RecordSlowOp("rangequeries", 1);
 		}
+		testResults.RecordLatency("rangequeries", taken);
 		testResults.RecordOpsDone("rangequeries", 1);
 
 	}
 
 	private void rotateCollection() {
 		if (maxCollections > 1) {
-			coll = colls.get(lastCollection);
-			lastCollection = (lastCollection + 1) % maxCollections;
+			collectionzipf = new ZipfDistribution(curCollections -1, 0.99);
+			if(incrementIntvl > 0 && curCollections < maxCollections) {
+				Date now = new Date();
+				int secondsSinceLastCheck = (int)(now.getTime() - lastIncTime.getTime()) / 1000;
+				if (secondsSinceLastCheck >= incrementIntvl) {
+					curCollections += incrementRate;
+					if (curCollections > maxCollections) {
+						curCollections = maxCollections;
+					}
+					//System.out.println(String.format("its been %d seconds, maxcoll is now %d", secondsSinceLastCheck, curCollections));
+					lastIncTime = now;
+					testResults.SetCollectionsNum(curCollections);
+				}
+			}
+			coll = colls.get(nextCollection);
+			currCollection = nextCollection;
+			nextCollection = collectionzipf.sample();
 		}
 	}	
 
@@ -374,6 +425,7 @@ public class MongoWorker implements Runnable {
 			Document key) {
 		// Key Query
 		rotateCollection();
+		Date starttime = new Date();
 		Document query = new Document();
 		long changedfield = (long) getNextVal((int) testOpts.NUMBER_SIZE);
 
@@ -388,6 +440,15 @@ public class MongoWorker implements Runnable {
 		} else {
 			query.append("_id", key);
 		}
+
+		if (collectionKeyRange > 0) {
+			query.remove("_id");
+			int val = collectionHash.get(currCollection);
+			query.append("_id", val);
+			collectionHash.set(currCollection, ++val);
+			
+		}
+	
 		Document fields = new Document("fld0", changedfield);
 		Document change = new Document("$set", fields);
 
@@ -396,7 +457,10 @@ public class MongoWorker implements Runnable {
 		} else {
 			this.coll.findOneAndUpdate(query, change); //These are immediate not batches
 		}
+		Date endtime = new Date();
+		Long taken = endtime.getTime() - starttime.getTime();
 		testResults.RecordOpsDone("updates", 1);
+		testResults.RecordLatency("updates", taken);
 
 	}
 
@@ -433,7 +497,9 @@ public class MongoWorker implements Runnable {
 					double threads = testOpts.numThreads;
 					double opsperthreadsecond = testOpts.opsPerSecond / threads;
 					double sleeptimems = 1000 / opsperthreadsecond;
-					
+
+					if (sleeptimems < 1)
+						sleeptimems = 1;
 					if(c==1){
 						//First time randomise
 			
@@ -449,7 +515,7 @@ public class MongoWorker implements Runnable {
 					int allops = testOpts.insertops + testOpts.keyqueries
 							+ testOpts.updates + testOpts.rangequeries
 							+ testOpts.arrayupdates;
-					int randop = getNextVal(allops);
+					int randop = getNextSequenceNum(allops);
 
 					if (randop < testOpts.insertops) {
 						insertNewRecord(bulkWriter);

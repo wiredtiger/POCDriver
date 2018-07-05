@@ -1,6 +1,5 @@
 package com.johnlpage.pocdriver;
 
-
 import java.util.Date;
 import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -10,6 +9,7 @@ public class POCTestResults {
 	Date	startTime;
 	Date	lastIntervalTime;
 	long	initialCount;
+	int	currentCollections = 1;
 
 	public static String[] opTypes = { "inserts", "keyqueries","updates","rangequeries"};
 	private ConcurrentHashMap<String,POCopStats> opStats;
@@ -88,6 +88,12 @@ public class POCTestResults {
 		POCopStats os = opStats.get(opType);
 		return os.slowOps.get();
 	}
+
+	public Long GetTotalLatency(String opType)
+	{
+		POCopStats os = opStats.get(opType);
+		return os.totalLatency.getAndSet(0);
+	}
 	
 	public void RecordSlowOp(String opType, int number)
 	{
@@ -105,7 +111,21 @@ public class POCTestResults {
 		os.totalOpsDone.addAndGet(howmany);
 		}
 	}
-	
 
+	public void RecordLatency(String opType, Long number) 
+	{
+		POCopStats os = opStats.get(opType);
+		os.totalLatency.addAndGet(number);
+	}
+
+	public void SetCollectionsNum(int num)
+	{
+		currentCollections = num;
+	}
+
+	public int GetCollectionsNum()
+	{
+		return currentCollections;
+	}
 	
 }
